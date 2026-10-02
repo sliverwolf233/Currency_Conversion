@@ -21,8 +21,11 @@ export class CurrencyPicker {
    * @param value initial code
    * @param onChange(code) callback after a successful selection
    */
-  constructor(root, codes, value, onChange) {
+  // noneLabel: optional — when provided, the list offers a leading "" value
+  // (e.g. "直换 / direct") so the picker can express "no intermediate currency".
+  constructor(root, codes, value, onChange, noneLabel = null) {
     this.root = root;
+    this.noneLabel = noneLabel;
     this.codes = codes;
     this.value = value;
     this.onChange = onChange;
@@ -57,8 +60,8 @@ export class CurrencyPicker {
   }
 
   setCodes(codes, keepValue = true) {
-    this.codes = codes;
-    if (!keepValue || !codes.includes(this.value)) this.value = codes[0];
+    this.codes = this.noneLabel ? ["", ...codes] : codes;
+    if (!keepValue || !this.codes.includes(this.value)) this.value = this.codes[0];
     this.renderValue();
   }
 
@@ -69,6 +72,7 @@ export class CurrencyPicker {
   }
 
   label(code) {
+    if (code === "") return this.noneLabel;
     const meta = CURRENCIES[code];
     return meta ? code + " · " + (LANG === "en" ? meta.en : meta.zh) : code;
   }
@@ -78,6 +82,7 @@ export class CurrencyPicker {
   }
 
   match(code, q) {
+    if (code === "") return true; // the "none" row always matches
     const meta = CURRENCIES[code] || { zh: "", en: "" };
     const hay = [code, meta.zh, meta.en.toLowerCase(), code.toLowerCase()];
     return hay.some((h) => h && h.toLowerCase().includes(q.toLowerCase()));

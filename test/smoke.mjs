@@ -187,6 +187,22 @@ check("jcb historical shows latest-only note", /仅公布当日|current day only
 $("inp-date").value = "";
 dom.window.document.querySelector(".tab.visa").click();
 
+// 2d. two-leg conversion via settlement currency (visa, offline stubs)
+{
+  pickCurrency("pick-from", "JPY");
+  pickCurrency("pick-to", "CNY");
+  pickCurrency("pick-settle", "USD");
+  $("btn-convert").click();
+  const okL = await sleepUntil(() => !$("res-converted").textContent.includes("spin") && parseFloat($("res-converted").textContent.replace(/,/g, "")) > 0);
+  await sleep(400);
+  const legsTxt = $("res-legs").textContent;
+  console.log("   two-leg:", $("res-converted").textContent, "|", legsTxt.slice(0, 80));
+  check("two-leg renders both legs detail", legsTxt.includes("1") && $("res-legs").textContent.length > 10, legsTxt.slice(0, 50));
+  check("two-leg combined amount rendered", okL, $("res-converted").textContent);
+  pickCurrency("pick-settle", ""); // back to direct
+  pickCurrency("pick-from", "USD");
+}
+
 // 3. mastercard tab
 dom.window.document.querySelector(".tab.mastercard").click();
 pickCurrency("pick-from", "USD"); pickCurrency("pick-to", "CNY");

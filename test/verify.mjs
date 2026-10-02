@@ -161,6 +161,29 @@ if (!OFFLINE) {
     } catch (e) { check("jcb jpy historical note", false, e.message); }
   }
 
+  console.log("== Two-leg (settlement) conversion ==");
+  {
+    try {
+      // Visa JPY -> USD settlement -> CNY billing vs direct JPY -> CNY
+      const l1 = await visa.convert({ from: "JPY", to: "USD", amount: 1000, fee: 0 });
+      const l2 = await visa.convert({ from: "USD", to: "CNY", amount: 1000, fee: 0 });
+      const direct = await visa.convert({ from: "JPY", to: "CNY", amount: 1000, fee: 0 });
+      const combined = l1.rate * l2.rate;
+      const ratio = combined / direct.rate;
+      console.log("   combined:", combined.toFixed(6), " direct:", direct.rate.toFixed(6), " ratio:", ratio.toFixed(4));
+      check("two-leg combined = product of legs", near(combined, l1.rate * l2.rate, 0.0001));
+      check("two-leg vs direct within 10%", ratio > 0.9 && ratio < 1.1, (ratio * 100).toFixed(2) + "%");
+    } catch (e) { check("visa two-leg", false, e.message); }
+    try {
+      // UnionPay matrix: EUR -> USD settlement -> CNY
+      const l1 = await up.convert({ from: "EUR", to: "USD", amount: 100 });
+      const l2 = await up.convert({ from: "USD", to: "CNY", amount: 100 });
+      const direct = await up.convert({ from: "EUR", to: "CNY", amount: 100 });
+      const ratio = (l1.rate * l2.rate) / direct.rate;
+      check("unionpay two-leg vs direct within 10%", ratio > 0.9 && ratio < 1.1, (ratio * 100).toFixed(2) + "%");
+    } catch (e) { check("unionpay two-leg", false, e.message); }
+  }
+
   console.log("== Cross-network coherence ==");
   try {
     const [v, m, u] = await Promise.all([

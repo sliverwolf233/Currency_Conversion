@@ -50,6 +50,7 @@ function orderCodes(codes) {
 // searchable comboboxes replace native selects for the big currency lists
 const pickFrom = new CurrencyPicker($("pick-from"), [], "USD", () => maybeConvert());
 const pickTo = new CurrencyPicker($("pick-to"), [], "CNY", () => maybeConvert());
+const pickSettle = new CurrencyPicker($("pick-settle"), [], "", () => maybeConvert(), t("settleNone"));
 function maybeConvert() { if (provider !== "compare") runConvert(); }
 
 function refreshSelectors() {
@@ -60,6 +61,9 @@ function refreshSelectors() {
   pickTo.setCodes(codes, false);
   pickFrom.setValue(codes.includes(keepFrom) ? keepFrom : "USD");
   pickTo.setValue(codes.includes(keepTo) ? keepTo : "CNY");
+  const settleCodes = ["", ...codes];
+  pickSettle.setCodes(codes, false);
+  if (settleCodes.includes(pickSettle.value)) pickSettle.setValue(pickSettle.value); else pickSettle.setValue("");
   // JCB JPY mode: default pair USD -> JPY
   if (provider === "jcb" && $("sel-jcb-billing").value === "JPY") {
     pickFrom.setValue("USD");
@@ -99,6 +103,15 @@ function kindLabel(kind) {
 }
 
 let seq = 0; // guard against out-of-order responses when switching fast
+
+// single dispatch to the active provider (used by single, two-leg and compare)
+function queryProvider(key, { from, to, amount, fee, date }) {
+  if (key === "visa") return visa.convert({ from, to, amount, fee, date });
+  if (key === "mastercard") return mastercard.convert({ from, to, amount, fee, date });
+  if (key === "jcb") return jcb.convert({ from, to, amount, billing: $("sel-jcb-billing").value, date });
+  return unionpay.convert({ from, to, amount, date });
+}
+
 async function runConvert() {
   const my = ++seq;
   const from = pickFrom.value, to = pickTo.value;
@@ -107,7 +120,7 @@ async function runConvert() {
   const dateRaw = $("inp-date").value; // "" = latest, else YYYY-MM-DD
   const date = dateRaw || null;
   $("fee-val").textContent = fee.toFixed(1) + "%";
-  if (provider === "compare") return runCompare(from, to, amount, fee, date);
+  if (provider === "compare") return runCompare(from, to, amount, fee, date, pickSettle.value);
 
   const btn = $("btn-convert");
   const old = btn.textContent;
@@ -116,12 +129,29 @@ async function runConvert() {
   $("res-converted").innerHTML = '<span class="spin"></span>';
 
   try {
-    let res;
-    if (provider === "visa") res = await visa.convert({ from, to, amount, fee, date });
-    else if (provider === "mastercard") res = await mastercard.convert({ from, to, amount, fee, date });
-    else if (provider === "jcb") res = await jcb.convert({ from, to, amount, billing: $("sel-jcb-billing").value, date });
-    else res = await unionpay.convert({ from, to, amount, date });
-    if (my !== seq) return; // stale response
+    const settle = pickSettle.value;
+    const useSettle = !!settle && settle !== from && settle !== to;
+    let res, legs = null;
+    if (useSettle) {
+      // two-leg conversion: from -> settle -> to (e.g. JPY -> USD settlement -> CNY billing)
+      const l1 = await queryProvider(provider, { from, to: settle, amount, fee, date });
+      const l2 = await queryProvider(provider, { from: settle, to, amount, fee, date });
+      if (my !== seq) return; // stale response
+      legs = [l1, l2];
+      res = {
+        provider,
+        rate: l1.rate * l2.rate,
+        converted: amount * l1.rate * l2.rate,
+        asOf: l1.asOf === l2.asOf ? l1.asOf : (l1.asOf || "-") + " / " + (l2.asOf || "-"),
+        fee: l1.fee,
+        kind: "twoleg",
+        notes: [...(l1.notes || []), ...(l2.notes || [])],
+        cached: l1.cached && l2.cached,
+      };
+    } else {
+      res = await queryProvider(provider, { from, to, amount, fee, date });
+      if (my !== seq) return; // stale response
+    }
 
     const meta = PROVIDERS[provider];
     $("res-provider").textContent = t(meta.nameKey);
@@ -135,8 +165,11 @@ async function runConvert() {
       amt.classList.remove("swapping");
     }, 130);
     $("res-unit").textContent = to;
-    $("res-rate").textContent = "1 " + from + " = " + fmtRate(res.rate) + " " + to + "  ·  " + kindLabel(res.kind) + (res.fee != null && res.fee > 0 ? " · " + fee.toFixed(1) + "% " + t("feeIncluded") : "");
+    $("res-rate").textContent = "1 " + from + " = " + fmtRate(res.rate) + " " + to + "  ·  " + (legs ? t("legLabels") : kindLabel(res.kind)) + (res.fee != null && res.fee > 0 ? " · " + fee.toFixed(1) + "% " + t(legs ? "bothLegsFee" : "feeIncluded") : "");
     $("res-rate-inv").textContent = "1 " + to + " = " + fmtRate(1 / res.rate) + " " + from;
+    $("res-legs").textContent = legs
+      ? t("leg1") + ": 1 " + from + " = " + fmtRate(legs[0].rate) + " " + settle + " (" + kindLabel(legs[0].kind) + ")  ·  " + t("leg2") + ": 1 " + settle + " = " + fmtRate(legs[1].rate) + " " + to + " (" + kindLabel(legs[1].kind) + ")"
+      : "";
     const notes = [...(res.notes || [])];
     if (res.fee == null) notes.push(t("feeExcluded"));
     $("res-notes").innerHTML = notes.map(n => '<span class="tag">i</span>' + n).join("<br>");
@@ -151,6 +184,7 @@ async function runConvert() {
     $("res-unit").textContent = "";
     $("res-rate").textContent = "";
     $("res-rate-inv").textContent = "";
+    $("res-legs").textContent = "";
     $("res-notes").innerHTML = '<span class="tag">!</span>' + t("errAll");
     $("res-notes").innerHTML += "<br><small>" + (e && e.message ? e.message : "") + "</small>";
     $("res-links").textContent = "";
@@ -159,7 +193,7 @@ async function runConvert() {
   }
 }
 
-async function runCompare(from, to, amount, fee, date = null) {
+async function runCompare(from, to, amount, fee, date = null, settle = null) {
   const card = $("compare-card");
   const rows = $("compare-rows");
   rows.innerHTML = "";
@@ -173,11 +207,16 @@ async function runCompare(from, to, amount, fee, date = null) {
     raf(() => raf(() => div.classList.remove("pre-enter")));
     try {
       let res;
-      if (key === "visa") res = await visa.convert({ from, to, amount, fee, date });
-      else if (key === "mastercard") res = await mastercard.convert({ from, to, amount, fee, date });
-      else if (key === "jcb") res = await jcb.convert({ from, to, amount, billing: "JPY", date });
-      else res = await unionpay.convert({ from, to, amount, date });
-      div.querySelector(".compare-rate").textContent = "1 " + from + " = " + fmtRate(res.rate) + " " + to + " (" + kindLabel(res.kind) + (res.fee != null && res.fee > 0 ? ", " + fee.toFixed(1) + "%" : "") + ")";
+      const useSettle = !!settle && settle !== from && settle !== to;
+      if (useSettle) {
+        const l1 = await queryProvider(key, { from, to: settle, amount, fee, date });
+        const l2 = await queryProvider(key, { from: settle, to, amount, fee, date });
+        res = { rate: l1.rate * l2.rate, converted: amount * l1.rate * l2.rate, asOf: l1.asOf === l2.asOf ? l1.asOf : (l1.asOf || "-") + " / " + (l2.asOf || "-"), fee: l1.fee, kind: "twoleg", cached: l1.cached && l2.cached };
+      } else {
+        res = await queryProvider(key, { from, to, amount, fee, date });
+      }
+      const legTag = settle && res.kind === "twoleg" ? " via " + settle : " · " + kindLabel(res.kind);
+      div.querySelector(".compare-rate").textContent = "1 " + from + " = " + fmtRate(res.rate) + " " + to + legTag + (res.fee != null && res.fee > 0 ? ", " + fee.toFixed(1) + "%" : "");
       div.querySelector(".compare-conv").textContent = fmtMoney(res.converted) + " " + to;
       const st = div.querySelector(".compare-status");
       st.className = "compare-status ok";
@@ -203,6 +242,10 @@ function applyLang() {
   $("btn-lang").textContent = LANG === "zh" ? "EN" : "中文";
   refreshSelectors();
   pickFrom.renderValue(); pickTo.renderValue(); // relabel in the new language
+  pickSettle.noneLabel = t("settleNone");
+  pickSettle.renderValue();
+  const searchEl = pickSettle.root.querySelector(".cpicker-search");
+  if (searchEl) searchEl.placeholder = LANG === "zh" ? "搜索：代码 / 中文名 / English" : "Search: code / name";
 }
 
 // ---------- wiring ----------

@@ -17,6 +17,7 @@
 | 💳 | Issuer-fee input (0–10%, type any value) applied to Visa/Mastercard rates, exactly like their official calculators | 发卡行手续费可直接输入（0–10%），仅作用于 Visa/Mastercard 汇率，与其官网计算器一致 |
 | 📅 | Historical rate dates: Visa/Mastercard ~1 year back, UnionPay since 2021, JCB USD table (JPY table is current-day only and says so) | 历史汇率查询：Visa/万事达约一年内、银联自 2021 年、JCB 美元表（日元表仅当日并明确提示） |
 | 🔍 | Searchable currency picker (Apple HIG style combobox): filter by code / 中文 / English, full keyboard navigation, match highlighting | 可搜索币种选择器（Apple HIG 风格）：代码/中文/英文过滤、完整键盘导航、命中高亮 |
+| 🔁 | Optional settlement currency (two-leg conversion): spend A, billed via USD etc., stored in B — shows both legs and the combined rate | 可选中间结算货币（两跳换汇）：花 A 货币、经 USD 等结算、入账 B 货币，展示两跳明细与综合汇率 |
 | 🇯🇵 | JCB dual billing modes: JPY-billed (基準レート) and USD-billed (Base rate) | JCB 双记账模式：日元记账（基準レート）与美元记账（Base rate） |
 | 🌐 | Bilingual UI (中文 / English), dark mode, mobile-friendly | 中英双语界面、深色模式、移动端适配 |
 | 📦 | 100% static — perfect for GitHub Pages; no build step, no backend | 纯静态、零构建、无后端，适合 GitHub Pages |

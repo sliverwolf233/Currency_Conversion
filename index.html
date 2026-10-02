@@ -52,6 +52,10 @@
           <span><span data-i18n="issuerFee">发卡行手续费 Issuer fee</span> <b id="fee-val">0%</b></span>
           <input id="inp-fee" type="number" min="0" max="10" step="0.1" value="0" inputmode="decimal">
         </label>
+        <label class="field" id="settle-field">
+          <span data-i18n="settleCur">中间结算货币 Settlement（可选 optional）</span>
+          <div id="pick-settle" class="cpicker-host"></div>
+        </label>
         <label class="field" id="date-field">
           <span data-i18n="rateDate">汇率日期 Rate date（可选 optional）</span>
           <input id="inp-date" type="date">
@@ -78,6 +82,7 @@
         <span class="unit" id="res-unit"></span>
       </div>
       <div class="result-rate" id="res-rate"></div>
+      <div class="result-rate legs" id="res-legs"></div>
       <div class="result-rate" id="res-rate-inv"></div>
       <div class="result-notes" id="res-notes"></div>
       <div class="result-links" id="res-links"></div>
