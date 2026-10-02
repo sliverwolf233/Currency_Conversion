@@ -16,26 +16,30 @@ export function currencies() { return [...new Set([...TRANS_LIST, ...BASE_LIST])
 
 export function supports(from, to) { return currencies().includes(from) && currencies().includes(to); }
 
-async function loadDay() {
-  // Immutable per-day files: cache "which day worked + matrix" for 12h.
-  const hit = cacheGet("up:today");
+async function loadDay(date = null) {
+  // Immutable per-day files (including weekends; publication gaps on CN
+  // holidays). date = "YYYY-MM-DD" or null = today. Cache per day; today's
+  // entry only for 12h, historical entries for a week.
+  const dayKey = date || new Date().toISOString().slice(0, 10);
+  const hit = cacheGet("up:" + dayKey);
   if (hit) return { ...hit, via: "cache", cached: true };
+  const base = date ? new Date(date + "T00:00:00Z") : new Date();
   for (let back = 0; back < 15; back++) {
-    const d = new Date(Date.now() - back * 86400000);
+    const d = new Date(base.getTime() - back * 86400000);
     const stamp = d.toISOString().slice(0, 10).replace(/-/g, "");
     try {
       const { json, via } = await fetchJSON("https://m.unionpayintl.com/jfimg/" + stamp + ".json");
       if (!json || !Array.isArray(json.exchangeRateJson) || !json.exchangeRateJson.length) throw new Error("up: bad payload");
       const data = { rows: json.exchangeRateJson, asOf: json.curDate || d.toISOString().slice(0, 10) };
-      cacheSet("up:today", data, 12 * 3600 * 1000);
+      cacheSet("up:" + dayKey, data, date ? 7 * 24 * 3600 * 1000 : 12 * 3600 * 1000);
       return { ...data, via };
     } catch (e) { /* walk back a day */ }
   }
-  throw new Error("up: no rate file");
+  throw new Error("up: no rate file for " + dayKey);
 }
 
-export async function convert({ from, to, amount }) {
-  const { rows, asOf, via, cached } = await loadDay();
+export async function convert({ from, to, amount, date = null }) {
+  const { rows, asOf, via, cached } = await loadDay(date);
   const map = new Map(rows.map(r => [r.transCur + "|" + r.baseCur, r.rateData]));
   let rate, kind, notes = [];
   if (map.has(from + "|" + to)) { rate = map.get(from + "|" + to); kind = "direct"; }

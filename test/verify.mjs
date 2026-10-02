@@ -135,6 +135,32 @@ if (!OFFLINE) {
     check("up EUR->KRW resolved from published data", ["inverse", "direct", "cross"].includes(c.kind));
   } catch (e) { check("up live", false, e.message); }
 
+  console.log("== Historical date queries (yesterday) ==");
+  {
+    const y = new Date(Date.now() - 86400000).toISOString().slice(0, 10); // yesterday
+    try {
+      const v = await visa.convert({ from: "USD", to: "CNY", amount: 100, fee: 0, date: y });
+      check("visa historical asOf = requested date", v.asOf === y, v.asOf + " (want " + y + ")");
+    } catch (e) { check("visa historical", false, e.message); }
+    try {
+      const m = await mc.convert({ from: "USD", to: "CNY", amount: 100, fee: 0, date: y });
+      check("mastercard historical asOf = requested date", m.asOf === y, m.asOf + " (want " + y + ")");
+    } catch (e) { check("mastercard historical", false, e.message); }
+    try {
+      const u = await up.convert({ from: "USD", to: "CNY", amount: 100, date: y });
+      check("unionpay historical asOf = requested date", u.asOf === y, u.asOf + " (want " + y + ")");
+    } catch (e) { check("unionpay historical", false, e.message); }
+    try {
+      const j = await jcb.convert({ from: "USD", to: "AED", amount: 100, billing: "USD", date: y });
+      check("jcb usd-table historical resolves", !!j.rate && isFinite(j.rate), "asOf=" + j.asOf + " rate=" + j.rate);
+    } catch (e) { check("jcb usd historical", false, e.message); }
+    try {
+      const jj = await jcb.convert({ from: "USD", to: "JPY", amount: 100, billing: "JPY", date: y });
+      const hasNote = (jj.notes || []).some(n => /仅公布当日|current day only/.test(n));
+      check("jcb jpy historical flags latest-only note", hasNote, JSON.stringify(jj.notes));
+    } catch (e) { check("jcb jpy historical note", false, e.message); }
+  }
+
   console.log("== Cross-network coherence ==");
   try {
     const [v, m, u] = await Promise.all([

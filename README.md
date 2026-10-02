@@ -14,12 +14,14 @@
 |---|---|---|
 | 🔄 | Convert with any of the four networks, each via its real official data source | 四家卡组织任选其一，各自对接官方真实数据源 |
 | ⚖️ | **Compare All** mode queries all four networks in parallel and ranks them | **对比全部** 模式并行查询四家并排对比 |
-| 💳 | Issuer-fee slider (0–5%) applied to Visa/Mastercard rates, exactly like their official calculators | 发卡行手续费滑杆（0–5%），仅作用于 Visa/Mastercard 汇率，与其官网计算器一致 |
+| 💳 | Issuer-fee input (0–10%, type any value) applied to Visa/Mastercard rates, exactly like their official calculators | 发卡行手续费可直接输入（0–10%），仅作用于 Visa/Mastercard 汇率，与其官网计算器一致 |
+| 📅 | Historical rate dates: Visa/Mastercard ~1 year back, UnionPay since 2021, JCB USD table (JPY table is current-day only and says so) | 历史汇率查询：Visa/万事达约一年内、银联自 2021 年、JCB 美元表（日元表仅当日并明确提示） |
+| 🔍 | Searchable currency picker (Apple HIG style combobox): filter by code / 中文 / English, full keyboard navigation, match highlighting | 可搜索币种选择器（Apple HIG 风格）：代码/中文/英文过滤、完整键盘导航、命中高亮 |
 | 🇯🇵 | JCB dual billing modes: JPY-billed (基準レート) and USD-billed (Base rate) | JCB 双记账模式：日元记账（基準レート）与美元记账（Base rate） |
 | 🌐 | Bilingual UI (中文 / English), dark mode, mobile-friendly | 中英双语界面、深色模式、移动端适配 |
 | 📦 | 100% static — perfect for GitHub Pages; no build step, no backend | 纯静态、零构建、无后端，适合 GitHub Pages |
 | 🔌 | Resilient fetching: direct → custom proxy → public CORS proxies raced in parallel, plus all-day localStorage caching | 多通道容灾：直连 → 自建代理 → 公共代理并发竞速，当日结果本地缓存 |
-| 🧪 | End-to-end test suite verified against live data (25 checks) | 端到端测试套件基于真实数据验证（25 项断言） |
+| 🧪 | Offline + live test suites (66 assertions) run locally and in GitHub Actions | 离线+真实数据测试套件（66 项断言），本地与 GitHub Actions 均可运行 |
 
 ## 数据来源 Data sources
 
@@ -69,7 +71,7 @@ npm run serve    # any static server works locally
 
 GitHub Actions runs the syntax checks and offline suites on every push/PR (required), plus the live suites on a best-effort basis (runner IPs are frequently blocked by the card networks — [`.github/workflows/tests.yml`](.github/workflows/tests.yml)).
 
-The verify suite unit-tests the JCB HTML parsers against saved fixtures and live-queries all four networks, checking rate plausibility, exact fee math, inverse/cross-rate consistency and cross-network coherence (Visa/MC/UnionPay agreed within 0.34% on USD→CNY at verification time). The smoke suite boots the real page headlessly and clicks through every provider tab, the compare-all mode, the zh/EN toggle and the swap button (20 assertions).
+The verify suite unit-tests the JCB HTML parsers against saved fixtures and live-queries all four networks — rate plausibility, exact fee math, inverse/cross-rate consistency, historical-date queries (Visa/Mastercard/UnionPay all return exactly the requested past day) and cross-network coherence (Visa/MC/UnionPay agreed within 0.34% on USD→CNY at verification time). The smoke suite boots the real page headlessly and drives it like a user: every provider tab, the searchable currency picker (filter, keyboard navigation, Enter/Esc), the historical-date flow, the compare-all mode, the zh/EN toggle and the swap button (32 assertions).
 
 测试套件对 JCB 解析器做离线断言，并对四家做真实查询，校验汇率合理性、手续费精确计算、倒数/交叉汇率一致性与跨卡组织一致性（验证时 USD→CNY 三家价差仅 0.34%）。
 

@@ -1,6 +1,7 @@
 import { t, LANG, setLang, I18N } from "./i18n.js";
 import { CURRENCIES, currName } from "./currencies.js";
 import { clearCache } from "./net.js";
+import { CurrencyPicker } from "./currency-picker.js";
 import * as visa from "./providers/visa.js";
 import * as mastercard from "./providers/mastercard.js";
 import * as jcb from "./providers/jcb.js";
@@ -39,30 +40,30 @@ function availableCodes() {
   return visa.CURRENCIES;
 }
 
-function fillSelect(sel, codes, keep) {
-  const prev = keep || sel.value;
-  // sort: known metadata first (majors), then alphabetical for the rest
+function orderCodes(codes) {
+  // majors (with metadata) first, then the rest alphabetically
   const known = codes.filter(c => CURRENCIES[c]);
   const rest = codes.filter(c => !CURRENCIES[c]).sort();
-  const ordered = [...new Set([...known, ...rest])];
-  sel.innerHTML = "";
-  for (const c of ordered) {
-    const o = document.createElement("option");
-    o.value = c;
-    o.textContent = CURRENCIES[c] ? currName(c, LANG) : c;
-    sel.appendChild(o);
-  }
-  if (ordered.includes(prev)) sel.value = prev;
+  return [...new Set([...known, ...rest])];
 }
 
+// searchable comboboxes replace native selects for the big currency lists
+const pickFrom = new CurrencyPicker($("pick-from"), [], "USD", () => maybeConvert());
+const pickTo = new CurrencyPicker($("pick-to"), [], "CNY", () => maybeConvert());
+function maybeConvert() { if (provider !== "compare") runConvert(); }
+
 function refreshSelectors() {
-  const codes = availableCodes();
-  fillSelect($("sel-from"), codes, "USD");
-  fillSelect($("sel-to"), codes, "CNY");
+  const codes = orderCodes(availableCodes());
+  const keepFrom = pickFrom.codes.includes(pickFrom.value) ? pickFrom.value : "USD";
+  const keepTo = pickTo.codes.includes(pickTo.value) ? pickTo.value : "CNY";
+  pickFrom.setCodes(codes, false);
+  pickTo.setCodes(codes, false);
+  pickFrom.setValue(codes.includes(keepFrom) ? keepFrom : "USD");
+  pickTo.setValue(codes.includes(keepTo) ? keepTo : "CNY");
   // JCB JPY mode: default pair USD -> JPY
   if (provider === "jcb" && $("sel-jcb-billing").value === "JPY") {
-    fillSelect($("sel-from"), codes, "USD");
-    fillSelect($("sel-to"), codes, "JPY");
+    pickFrom.setValue("USD");
+    pickTo.setValue("JPY");
   }
 }
 
@@ -100,11 +101,13 @@ function kindLabel(kind) {
 let seq = 0; // guard against out-of-order responses when switching fast
 async function runConvert() {
   const my = ++seq;
-  const from = $("sel-from").value, to = $("sel-to").value;
+  const from = pickFrom.value, to = pickTo.value;
   const amount = parseFloat($("inp-amount").value) || 0;
-  const fee = parseFloat($("inp-fee").value) || 0;
+  const fee = Math.min(10, Math.max(0, parseFloat($("inp-fee").value) || 0));
+  const dateRaw = $("inp-date").value; // "" = latest, else YYYY-MM-DD
+  const date = dateRaw || null;
   $("fee-val").textContent = fee.toFixed(1) + "%";
-  if (provider === "compare") return runCompare(from, to, amount, fee);
+  if (provider === "compare") return runCompare(from, to, amount, fee, date);
 
   const btn = $("btn-convert");
   const old = btn.textContent;
@@ -114,10 +117,10 @@ async function runConvert() {
 
   try {
     let res;
-    if (provider === "visa") res = await visa.convert({ from, to, amount, fee });
-    else if (provider === "mastercard") res = await mastercard.convert({ from, to, amount, fee });
-    else if (provider === "jcb") res = await jcb.convert({ from, to, amount, billing: $("sel-jcb-billing").value });
-    else res = await unionpay.convert({ from, to, amount });
+    if (provider === "visa") res = await visa.convert({ from, to, amount, fee, date });
+    else if (provider === "mastercard") res = await mastercard.convert({ from, to, amount, fee, date });
+    else if (provider === "jcb") res = await jcb.convert({ from, to, amount, billing: $("sel-jcb-billing").value, date });
+    else res = await unionpay.convert({ from, to, amount, date });
     if (my !== seq) return; // stale response
 
     const meta = PROVIDERS[provider];
@@ -156,7 +159,7 @@ async function runConvert() {
   }
 }
 
-async function runCompare(from, to, amount, fee) {
+async function runCompare(from, to, amount, fee, date = null) {
   const card = $("compare-card");
   const rows = $("compare-rows");
   rows.innerHTML = "";
@@ -170,10 +173,10 @@ async function runCompare(from, to, amount, fee) {
     raf(() => raf(() => div.classList.remove("pre-enter")));
     try {
       let res;
-      if (key === "visa") res = await visa.convert({ from, to, amount, fee });
-      else if (key === "mastercard") res = await mastercard.convert({ from, to, amount, fee });
-      else if (key === "jcb") res = await jcb.convert({ from, to, amount, billing: "JPY" });
-      else res = await unionpay.convert({ from, to, amount });
+      if (key === "visa") res = await visa.convert({ from, to, amount, fee, date });
+      else if (key === "mastercard") res = await mastercard.convert({ from, to, amount, fee, date });
+      else if (key === "jcb") res = await jcb.convert({ from, to, amount, billing: "JPY", date });
+      else res = await unionpay.convert({ from, to, amount, date });
       div.querySelector(".compare-rate").textContent = "1 " + from + " = " + fmtRate(res.rate) + " " + to + " (" + kindLabel(res.kind) + (res.fee != null && res.fee > 0 ? ", " + fee.toFixed(1) + "%" : "") + ")";
       div.querySelector(".compare-conv").textContent = fmtMoney(res.converted) + " " + to;
       const st = div.querySelector(".compare-status");
@@ -199,6 +202,7 @@ function applyLang() {
   }
   $("btn-lang").textContent = LANG === "zh" ? "EN" : "中文";
   refreshSelectors();
+  pickFrom.renderValue(); pickTo.renderValue(); // relabel in the new language
 }
 
 // ---------- wiring ----------
@@ -209,8 +213,10 @@ $("provider-tabs").addEventListener("click", (ev) => {
 $("btn-convert").addEventListener("click", runConvert);
 let swapRot = 0;
 $("btn-swap").addEventListener("click", () => {
-  const f = $("sel-from"), s = $("sel-to");
-  const tmp = f.value; f.value = s.value; s.value = tmp;
+  const tmp = pickFrom.value;
+  pickFrom.setValue(pickTo.value);
+  pickTo.setValue(tmp);
+  maybeConvert();
   swapRot += 180;
   const btnS = $("btn-swap");
   btnS.style.setProperty("--rot", swapRot + "deg");
@@ -232,3 +238,11 @@ $("btn-clear-cache").addEventListener("click", () => { clearCache(); $("btn-clea
 applyLang();
 setProvider(provider, { silent: true }); // no network on first paint
 $("fee-val").textContent = (parseFloat($("inp-fee").value) || 0).toFixed(1) + "%";
+// date picker bounds: oldest practical limit is UnionPay's 2021 archive floor
+{
+  const today = new Date().toISOString().slice(0, 10);
+  $("inp-date").max = today;
+  $("inp-date").min = "2021-01-04";
+}
+$("inp-date").addEventListener("change", () => { if (provider !== "compare") runConvert(); });
+$("inp-fee").addEventListener("change", () => { if (provider === "visa" || provider === "mastercard") runConvert(); });

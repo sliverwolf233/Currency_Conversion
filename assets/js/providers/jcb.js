@@ -61,35 +61,40 @@ export function parseUsdPage(html) {
   return { rates, asOf };
 }
 
-async function loadTable(billing) {
-  const dayKey = new Date().toISOString().slice(0, 10);
+async function loadTable(billing, date = null) {
+  // date: "YYYY-MM-DD" or null = today/latest. The JPY table publishes the
+  // current business day only (no history pages exist); the USD table has
+  // dated permalinks usdMMDDYYYY.html.
+  const dayKey = date || new Date().toISOString().slice(0, 10);
   const cacheKey = "jcb:" + billing + ":" + dayKey;
   const cached = cacheGet(cacheKey);
   if (cached) return { ...cached, cached: true, via: "cache" };
   if (billing === "USD") {
-    // walk back from today until a dated page resolves (weekends/holidays)
+    // walk back from the requested day until a dated page resolves (weekends/holidays)
+    const base = date ? new Date(date + "T00:00:00Z") : new Date();
     for (let back = 0; back < 7; back++) {
-      const d = new Date(Date.now() - back * 86400000);
+      const d = new Date(base.getTime() - back * 86400000);
       const stamp = String(d.getUTCMonth() + 1).padStart(2, "0") + String(d.getUTCDate()).padStart(2, "0") + d.getUTCFullYear();
       try {
         const { text, via } = await fetchText("https://www.jcb.jp/rate/usd" + stamp + ".html");
         const parsed = parseUsdPage(text);
-        cacheSet(cacheKey, parsed, ttlEndOfDayPlus(6));
+        cacheSet(cacheKey, parsed, date ? 7 * 24 * 3600 * 1000 : ttlEndOfDayPlus(6));
         return { ...parsed, via };
       } catch (e) { /* try previous day */ }
     }
-    throw new Error("jcb: no usd rate page");
+    throw new Error("jcb: no usd rate page for " + dayKey);
   } else {
     const { text, via } = await fetchText("https://www.jcb.jp/rate/jpy.html");
     const parsed = parseJpyPage(text);
     cacheSet(cacheKey, parsed, ttlEndOfDayPlus(6));
-    return { ...parsed, via };
+    return { ...parsed, via, latestOnly: !!date };
   }
 }
 
-export async function convert({ from, to, amount, billing = "JPY" }) {
-  const { rates, asOf, via, cached } = await loadTable(billing);
+export async function convert({ from, to, amount, billing = "JPY", date = null }) {
+  const { rates, asOf, via, cached, latestOnly } = await loadTable(billing, date);
   let rate, kind, notes = [t("jcbSellNote")];
+  if (latestOnly && asOf && date && asOf !== date) notes.push(t("jcbJpyLatestOnly"));
   if (billing === "USD") {
     if (from === "USD" && rates[to]) { rate = rates[to]; kind = "direct"; }
     else if (to === "USD" && rates[from]) { rate = 1 / rates[from]; kind = "inverse"; }

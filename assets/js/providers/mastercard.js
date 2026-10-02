@@ -16,15 +16,16 @@ export const CURRENCIES = ["AFN","ALL","DZD","AOA","ARS","AMD","AWG","AUD","AZN"
 
 export function supports() { return true; } // any pair among CURRENCIES
 
-export async function convert({ from, to, amount, fee = 0 }) {
-  const dayKey = new Date().toISOString().slice(0, 10);
+export async function convert({ from, to, amount, fee = 0, date = null }) {
+  // date: "YYYY-MM-DD" historical rate day, or null = latest issued ("0000-00-00")
+  const dayKey = date || new Date().toISOString().slice(0, 10);
   const cacheKey = "mc:" + from + to + ":" + Number(fee).toFixed(1) + ":" + dayKey;
   const cached = cacheGet(cacheKey);
   let payload, via, cachedFlag = false;
   if (cached) { payload = cached; via = "cache"; cachedFlag = true; }
   else {
     const params = new URLSearchParams({
-      exchange_date: "0000-00-00",
+      exchange_date: date || "0000-00-00",
       transaction_currency: from,
       cardholder_billing_currency: to,
       bank_fee: String(fee),
@@ -35,7 +36,7 @@ export async function convert({ from, to, amount, fee = 0 }) {
       throw new Error("mastercard: " + (json && json.data && json.data.errorMessage || "unexpected payload"));
     }
     payload = json;
-    cacheSet(cacheKey, payload, ttlEndOfDayPlus(6));
+    cacheSet(cacheKey, payload, date ? 7 * 24 * 3600 * 1000 : ttlEndOfDayPlus(6));
     via = usedVia;
   }
   const rate = parseFloat(payload.data.conversionRate); // 1 FROM = rate TO (fee included)

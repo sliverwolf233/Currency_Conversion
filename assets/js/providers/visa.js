@@ -39,21 +39,23 @@ async function queryDay(from, to, fee, date, via) {
   return { json, via: usedVia };
 }
 
-export async function convert({ from, to, amount, fee = 0 }) {
-  const dayKey = new Date().toISOString().slice(0, 10);
+export async function convert({ from, to, amount, fee = 0, date = null }) {
+  // date: "YYYY-MM-DD" historical rate day, or null = today (with walk-back)
+  const dayKey = date || new Date().toISOString().slice(0, 10);
   const cacheKey = "visa:" + from + to + ":" + Number(fee).toFixed(1) + ":" + dayKey;
   const cached = cacheGet(cacheKey);
   let payload, via, cachedFlag = false;
   if (cached) { payload = cached; via = "cache"; cachedFlag = true; }
   else {
     let lastErr;
-    // Try today, then walk back a few days (weekends / not-yet-published rates 400/500)
+    const base = date ? new Date(date + "T00:00:00Z") : new Date();
+    // Walk back a few days from the requested day (weekends / holidays / not-yet-published)
     for (let back = 0; back < 5; back++) {
-      const d = new Date(Date.now() - back * 86400000);
+      const d = new Date(base.getTime() - back * 86400000);
       try {
         const r = await queryDay(from, to, fee, d);
         payload = r.json; via = r.via;
-        cacheSet(cacheKey, payload, ttlEndOfDayPlus(6));
+        cacheSet(cacheKey, payload, date ? 7 * 24 * 3600 * 1000 : ttlEndOfDayPlus(6));
         break;
       } catch (e) { lastErr = e; }
     }
