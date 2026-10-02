@@ -699,12 +699,17 @@ static int RunCli(int argc, wchar_t** argv) {
     return 2;
   }
   ConvInput in;
+  auto argOr = [&](int i) -> std::string {
+    std::string s = argc > i ? WideToUtf8(argv[i]) : "";
+    if (s == "-" || s == "\"\"") s = ""; // empty placeholder (cmd quoting)
+    return s;
+  };
   in.from = Upper(WideToUtf8(argv[2]));
   in.to = Upper(WideToUtf8(argv[3]));
   in.amount = _wtof(argv[4]);
   in.fee = argc > 5 ? _wtof(argv[5]) : 0;
-  in.dateIso = argc > 6 ? WideToUtf8(argv[6]) : "";
-  in.settle = argc > 7 ? Upper(WideToUtf8(argv[7])) : "";
+  in.dateIso = argOr(6);
+  in.settle = argc > 7 ? Upper(argOr(7)) : "";
   in.provider = argc > 8 ? WideToUtf8(argv[8]) : "visa";
   std::wstring report = BuildReport(in);
   printf("%s\r\n", WideToUtf8(report).c_str());
