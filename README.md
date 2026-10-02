@@ -115,4 +115,4 @@ Rates are fetched from the card networks' public pages and are indicative only; 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+AGPL-3.0 — see [LICENSE](LICENSE).
