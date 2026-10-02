@@ -393,11 +393,25 @@ static std::string UrlEncode(const std::string& s) {
 // can call it without any CORS restrictions.
 static HttpResult McFetch(const std::wstring& path) {
   HttpResult r = HttpGet(L"www.mastercard.com", 443, path);
-  if (r.status == 403 || r.status == 0 || r.body.empty()) {
-    std::string full = "https://www.mastercard.com" + WideToUtf8(path);
-    std::wstring proxyPath = L"/raw?url=" + Utf8ToWide(UrlEncode(full));
-    HttpResult via = HttpGet(L"api.allorigins.win", 443, proxyPath, 25000);
-    if (via.status == 200 && !via.body.empty()) return via;
+  if (r.status == 200 && !r.body.empty()) return r;
+  std::string full = "https://www.mastercard.com" + WideToUtf8(path);
+  auto looksJson = [](const std::string& b) { return b.find('{') != std::string::npos; };
+  { // relay 1: allorigins raw
+    std::wstring p = L"/raw?url=" + Utf8ToWide(UrlEncode(full));
+    HttpResult via = HttpGet(L"api.allorigins.win", 443, p, 25000);
+    if (via.status == 200 && looksJson(via.body)) return via;
+  }
+  { // relay 2: codetabs
+    std::wstring p = L"/v1/proxy?quest=" + Utf8ToWide(UrlEncode(full));
+    HttpResult via = HttpGet(L"api.codetabs.com", 443, p, 25000);
+    if (via.status == 200 && looksJson(via.body)) return via;
+  }
+  { // relay 3: r.jina.ai — wraps payloads in markdown, extract the JSON block
+    HttpResult via = HttpGet(L"r.jina.ai", 443, Utf8ToWide(full), 30000);
+    if (via.status == 200) {
+      size_t s = via.body.find('{'), e = via.body.rfind('}');
+      if (s != std::string::npos && e > s) { via.body = via.body.substr(s, e - s + 1); return via; }
+    }
   }
   return r;
 }
@@ -411,16 +425,25 @@ static Quote McQuote(const std::string& from, const std::string& to, double fee,
            "?exchange_date=%s&transaction_currency=%s&cardholder_billing_currency=%s&bank_fee=%.2f&transaction_amount=100",
            dateParam.c_str(), from.c_str(), to.c_str(), fee);
   HttpResult r = McFetch(Utf8ToWide(path));
-  if (r.status != 200 || r.body.empty()) { q.err = "Mastercard 接口请求失败 (HTTP " + std::to_string(r.status) + ")"; return q; }
-  JPtr j = JsonParse(r.body);
-  if (!j || !j->is("data")) { q.err = "Mastercard 响应解析失败"; return q; }
+  JPtr j = r.status == 200 && !r.body.empty() ? JsonParse(r.body) : nullptr;
+  auto mcErr = [&](const std::string& msg) -> Quote {
+    // a requested date may be unpublished (future/today): fall back to latest
+    if (!dateIso.empty()) {
+      Quote fb = McQuote(from, to, fee, "");
+      if (fb.ok) { fb.note = "指定日期不可用，已用最近发布汇率"; return fb; }
+    }
+    q.err = msg + " (HTTP " + std::to_string(r.status) + ")";
+    return q;
+  };
+  if (!j || !j->is("data")) return mcErr("Mastercard 接口请求失败");
   JPtr data = j->get("data");
-  if (data->is("errorMessage")) { q.err = "Mastercard: " + (*data->get("errorMessage")).str; return q; }
+  if (data->is("errorMessage")) return mcErr("Mastercard: " + (*data->get("errorMessage")).str);
   if (!data->is("conversionRate")) { q.err = "Mastercard 响应缺少汇率字段"; return q; }
   q.rate = atof((*data->get("conversionRate")).str.c_str());
   q.asOf = data->is("fxDate") ? (*data->get("fxDate")).str : "";
   q.ok = q.rate > 0;
   q.kind = "官方直报"; q.via = "mastercard";
+  q.note = "万事达发布最近营业日汇率（fxDate 常为前一工作日）";
   if (!q.ok) q.err = "Mastercard 汇率无效";
   return q;
 }
@@ -547,7 +570,12 @@ static std::wstring BuildReport(const ConvInput& in) {
   std::wstring providerName = ProviderLabel(in.provider);
   if (in.compare) {
     const char* provs[4] = { "visa", "mastercard", "jcb-jpy", "unionpay" };
-    std::wstring report = L"═══ 四大卡组织对比（交易 " + Utf8ToWide(in.from) + L" → 记账 " + Utf8ToWide(in.to) + L"）═══\r\n";
+    // short lines, one fact per line — classic monospace-friendly layout
+    std::wstring report = L"【四大卡组织对比】\r\n";
+    report += L"交易 " + Utf8ToWide(in.from) + L" → 卡内 " + Utf8ToWide(in.to);
+    if (!in.settle.empty() && in.settle != in.from && in.settle != in.to)
+      report += L"（经 " + Utf8ToWide(in.settle) + L" 两跳）";
+    report += L"\r\n\r\n";
     for (int i = 0; i < 4; ++i) {
       std::string p = provs[i];
       Quote q = QueryOne(p, in.from, in.to, in.fee, in.dateIso);
@@ -557,14 +585,19 @@ static std::wstring BuildReport(const ConvInput& in) {
         if (q1.ok && q2.ok) q.rate = q1.rate * q2.rate;
       }
       wchar_t line[512];
+      report += ProviderLabel(p) + L"\r\n";
       if (q.ok) {
-        swprintf(line, 512, L"%-18s 1 %s = %s %s  →  %s %s  [%s, %s]\r\n",
-                 ProviderLabel(p).c_str(), Utf8ToWide(in.from).c_str(), FmtRate(q.rate).c_str(), Utf8ToWide(in.to).c_str(),
-                 FmtMoney(in.amount * q.rate).c_str(), Utf8ToWide(in.to).c_str(), Utf8ToWide(q.kind).c_str(), Utf8ToWide(q.asOf).c_str());
+        swprintf(line, 512, L"  1 %s = %s %s → %s %s\r\n",
+                 Utf8ToWide(in.from).c_str(), FmtRate(q.rate).c_str(), Utf8ToWide(in.to).c_str(),
+                 FmtMoney(in.amount * q.rate).c_str(), Utf8ToWide(in.to).c_str());
+        report += line;
+        swprintf(line, 512, L"  %s · %s\r\n", Utf8ToWide(q.kind).c_str(), Utf8ToWide(q.asOf).c_str());
+        report += line;
       } else {
-        swprintf(line, 512, L"%-18s 失败：%s\r\n", ProviderLabel(p).c_str(), Utf8ToWide(q.err).c_str());
+        swprintf(line, 512, L"  失败：%s\r\n", Utf8ToWide(q.err).c_str());
+        report += line;
       }
-      report += line;
+      report += L"\r\n";
     }
     return report;
   }
@@ -593,29 +626,28 @@ static std::wstring BuildReport(const ConvInput& in) {
   // reinterpret our UTF-8 byte strings in the ANSI codepage (mojibake)
   std::wstring fromW = Utf8ToWide(in.from), toW = Utf8ToWide(in.to), settleW = Utf8ToWide(in.settle);
   std::wstring kindW = twoLeg ? std::wstring(L"两跳换汇") : Utf8ToWide(q.kind);
-  std::wstring report = L"═══ " + providerName + L" ═══\r\n";
+  std::wstring report = L"【" + providerName + L"】\r\n";
   wchar_t line[512];
-  swprintf(line, 512, L"%s %s  =  %s %s\r\n",
+  swprintf(line, 512, L"%s %s = %s %s\r\n",
            FmtMoney(in.amount).c_str(), fromW.c_str(),
            FmtMoney(in.amount * q.rate).c_str(), toW.c_str());
   report += line;
-  swprintf(line, 512, L"1 %s = %s %s  ·  %s", fromW.c_str(), FmtRate(q.rate).c_str(), toW.c_str(), kindW.c_str());
+  swprintf(line, 512, L"1 %s = %s %s\r\n", fromW.c_str(), FmtRate(q.rate).c_str(), toW.c_str());
   report += line;
-  if ((in.provider == "visa" || in.provider == "mastercard") && in.fee > 0) {
-    wchar_t fb[32]; swprintf(fb, 32, L" · 含 %.1f%% 手续费", in.fee);
-    if (twoLeg) report += L"（两跳均含）"; else report += fb;
-  }
-  report += L"\r\n";
   swprintf(line, 512, L"1 %s = %s %s\r\n", toW.c_str(), FmtRate(1.0 / q.rate).c_str(), fromW.c_str());
   report += line;
-  if (twoLeg) {
-    swprintf(line, 512, L"第1跳：1 %s = %s %s（%s）\r\n", fromW.c_str(), FmtRate(q1.rate).c_str(), settleW.c_str(), Utf8ToWide(q1.kind).c_str());
-    report += line;
-    swprintf(line, 512, L"第2跳：1 %s = %s %s（%s）\r\n", settleW.c_str(), FmtRate(q2.rate).c_str(), toW.c_str(), Utf8ToWide(q2.kind).c_str());
-    report += line;
+  report += L"报价：" + kindW + L"\r\n";
+  if ((in.provider == "visa" || in.provider == "mastercard") && in.fee > 0) {
+    wchar_t fb[48];
+    swprintf(fb, 48, L"手续费：%.1f%%（%s）\r\n", in.fee, twoLeg ? L"两跳均含" : L"已计入");
+    report += fb;
   }
-  {
-    swprintf(line, 512, L"汇率日期：%s\r\n", Utf8ToWide(q.asOf).c_str());
+  swprintf(line, 512, L"汇率日期：%s\r\n", Utf8ToWide(q.asOf).c_str());
+  report += line;
+  if (twoLeg) {
+    swprintf(line, 512, L"第1跳 1 %s = %s %s（%s）\r\n", fromW.c_str(), FmtRate(q1.rate).c_str(), settleW.c_str(), Utf8ToWide(q1.kind).c_str());
+    report += line;
+    swprintf(line, 512, L"第2跳 1 %s = %s %s（%s）\r\n", settleW.c_str(), FmtRate(q2.rate).c_str(), toW.c_str(), Utf8ToWide(q2.kind).c_str());
     report += line;
   }
   if (!q.note.empty() || (in.provider != "visa" && in.provider != "mastercard")) {
@@ -738,7 +770,7 @@ static int RunCli(int argc, wchar_t** argv) {
   in.provider = argc > 8 ? WideToUtf8(argv[8]) : "visa";
   in.compare = in.provider == "compare";
   std::wstring report = BuildReport(in);
-  printf("%s\r\n", WideToUtf8(report).c_str());
+  printf("%s", WideToUtf8(report).c_str());
   return report.find(L"查询失败") == std::wstring::npos ? 0 : 1;
 }
 
@@ -830,11 +862,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       mkStatic(L"金额(&A)：", 276, y, 52);
       G.amount = mk(L"EDIT", L"100", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 330, y, 92, 22, IDC_AMOUNT);
       y += 34;
-      mkStatic(L"交易货币(&F)（刷卡）：", 14, y, 118);
-      G.from = mk(L"COMBOBOX", L"USD", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 134, y, 88, 240, IDC_FROM);
-      G.swapB = mk(L"BUTTON", L"⇄", BS_PUSHBUTTON | WS_TABSTOP, 226, y - 1, 30, 24, IDC_SWAP);
-      mkStatic(L"记账货币(&T)（入账）：", 238, y, 118);
-      G.to = mk(L"COMBOBOX", L"CNY", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 358, y, 88, 240, IDC_TO);
+      mkStatic(L"交易货币(&F)：", 14, y, 78);
+      G.from = mk(L"COMBOBOX", L"USD", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 94, y, 100, 240, IDC_FROM);
+      G.swapB = mk(L"BUTTON", L"⇄", BS_PUSHBUTTON | WS_TABSTOP, 200, y - 1, 30, 24, IDC_SWAP);
+      mkStatic(L"卡内货币(&T)：", 236, y, 80);
+      G.to = mk(L"COMBOBOX", L"CNY", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 318, y, 100, 240, IDC_TO);
       // fee moved to row 3 to keep row 2 uncluttered
       y += 34;
       mkStatic(L"结算货币(&S)：", 14, y, 78);
@@ -842,8 +874,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       ComboBox_AddString(G.settle, L""); // 直换
       mkStatic(L"手续费%(&E)：", 216, y, 70);
       G.fee = mk(L"EDIT", L"0", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 288, y, 44, 22, IDC_FEE);
-      mkStatic(L"日期(&D)：", 340, y, 40);
-      G.date = mk(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 382, y, 96, 22, IDC_DATE);
+      mkStatic(L"日期(&D) 可空：", 336, y, 88);
+      G.date = mk(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 426, y, 70, 22, IDC_DATE);
       y += 32;
       G.go = mk(L"BUTTON", L"查询换算", BS_DEFPUSHBUTTON | WS_TABSTOP, 14, y, 90, 26, IDC_GO);
       G.compareB = mk(L"BUTTON", L"对比全部", BS_PUSHBUTTON | WS_TABSTOP, 110, y, 90, 26, IDC_COMPARE);
