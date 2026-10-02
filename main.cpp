@@ -385,6 +385,7 @@ static Quote McQuote(const std::string& from, const std::string& to, double fee,
            "?exchange_date=%s&transaction_currency=%s&cardholder_billing_currency=%s&bank_fee=%.2f&transaction_amount=100",
            dateParam.c_str(), from.c_str(), to.c_str(), fee);
   HttpResult r = HttpGet(L"www.mastercard.com", 443, Utf8ToWide(path));
+  if (r.status == 403 || r.status == 0) r = HttpGet(L"www.mastercard.com", 443, Utf8ToWide(path)); // Akamai occasional block — retry
   if (r.status != 200 || r.body.empty()) { q.err = "Mastercard 接口请求失败 (HTTP " + std::to_string(r.status) + ")"; return q; }
   JPtr j = JsonParse(r.body);
   if (!j || !j->is("data")) { q.err = "Mastercard 响应解析失败"; return q; }
@@ -532,11 +533,11 @@ static std::wstring BuildReport(const ConvInput& in) {
       }
       wchar_t line[512];
       if (q.ok) {
-        swprintf(line, 512, L"%-18s 1 %hs = %s %hs  →  %s %hs  [%hs, %hs]\r\n",
-                 ProviderLabel(p).c_str(), in.from.c_str(), FmtRate(q.rate).c_str(), in.to.c_str(),
-                 FmtMoney(in.amount * q.rate).c_str(), in.to.c_str(), q.kind.c_str(), q.asOf.c_str());
+        swprintf(line, 512, L"%-18s 1 %s = %s %s  →  %s %s  [%s, %s]\r\n",
+                 ProviderLabel(p).c_str(), Utf8ToWide(in.from).c_str(), FmtRate(q.rate).c_str(), Utf8ToWide(in.to).c_str(),
+                 FmtMoney(in.amount * q.rate).c_str(), Utf8ToWide(in.to).c_str(), Utf8ToWide(q.kind).c_str(), Utf8ToWide(q.asOf).c_str());
       } else {
-        swprintf(line, 512, L"%-18s 失败：%hs\r\n", ProviderLabel(p).c_str(), q.err.c_str());
+        swprintf(line, 512, L"%-18s 失败：%s\r\n", ProviderLabel(p).c_str(), Utf8ToWide(q.err).c_str());
       }
       report += line;
     }
@@ -550,6 +551,12 @@ static std::wstring BuildReport(const ConvInput& in) {
     q1 = QueryOne(in.provider, in.from, in.settle, in.fee, in.dateIso);
     q2 = QueryOne(in.provider, in.settle, in.to, in.fee, in.dateIso);
     q.ok = q1.ok && q2.ok;
+    if (q.ok) {
+      q.rate = q1.rate * q2.rate;
+      q.kind = "两跳换汇";
+      q.asOf = q1.asOf == q2.asOf ? q1.asOf : (q1.asOf + " / " + q2.asOf);
+      q.via = in.provider;
+    }
   } else {
     q = QueryOne(in.provider, in.from, in.to, in.fee, in.dateIso);
   }
@@ -557,32 +564,33 @@ static std::wstring BuildReport(const ConvInput& in) {
     const std::string& e = twoLeg ? (!q1.ok ? q1.err : q2.err) : q.err;
     return L"查询失败：" + Utf8ToWide(e) + L"\r\n\r\n提示：可稍后重试；Visa 偶尔拒绝数据中心 IP。";
   }
+  // all display args are pre-converted wide strings — swprintf %hs would
+  // reinterpret our UTF-8 byte strings in the ANSI codepage (mojibake)
+  std::wstring fromW = Utf8ToWide(in.from), toW = Utf8ToWide(in.to), settleW = Utf8ToWide(in.settle);
+  std::wstring kindW = twoLeg ? std::wstring(L"两跳换汇") : Utf8ToWide(q.kind);
   std::wstring report = L"═══ " + providerName + L" ═══\r\n";
   wchar_t line[512];
-  swprintf(line, 512, L"%s %hs  =  %s %hs\r\n",
-           FmtMoney(in.amount).c_str(), in.from.c_str(),
-           FmtMoney(in.amount * q.rate).c_str(), in.to.c_str());
+  swprintf(line, 512, L"%s %s  =  %s %s\r\n",
+           FmtMoney(in.amount).c_str(), fromW.c_str(),
+           FmtMoney(in.amount * q.rate).c_str(), toW.c_str());
   report += line;
-  swprintf(line, 512, L"1 %hs = %s %hs  ·  %s", in.from.c_str(), FmtRate(q.rate).c_str(), in.to.c_str(),
-           (twoLeg ? L"两跳换汇" : Utf8ToWide(q.kind).c_str()).c_str());
+  swprintf(line, 512, L"1 %s = %s %s  ·  %s", fromW.c_str(), FmtRate(q.rate).c_str(), toW.c_str(), kindW.c_str());
   report += line;
   if ((in.provider == "visa" || in.provider == "mastercard") && in.fee > 0) {
     wchar_t fb[32]; swprintf(fb, 32, L" · 含 %.1f%% 手续费", in.fee);
     if (twoLeg) report += L"（两跳均含）"; else report += fb;
   }
   report += L"\r\n";
-  swprintf(line, 512, L"1 %hs = %s %hs\r\n", in.to.c_str(), FmtRate(1.0 / q.rate).c_str(), in.from.c_str());
+  swprintf(line, 512, L"1 %s = %s %s\r\n", toW.c_str(), FmtRate(1.0 / q.rate).c_str(), fromW.c_str());
   report += line;
   if (twoLeg) {
-    swprintf(line, 512, L"第1跳：1 %hs = %s %hs（%hs）\r\n", in.from.c_str(), FmtRate(q1.rate).c_str(), in.settle.c_str(), q1.kind.c_str());
+    swprintf(line, 512, L"第1跳：1 %s = %s %s（%s）\r\n", fromW.c_str(), FmtRate(q1.rate).c_str(), settleW.c_str(), Utf8ToWide(q1.kind).c_str());
     report += line;
-    swprintf(line, 512, L"第2跳：1 %hs = %s %hs（%hs）\r\n", in.settle.c_str(), FmtRate(q2.rate).c_str(), in.to.c_str(), q2.kind.c_str());
+    swprintf(line, 512, L"第2跳：1 %s = %s %s（%s）\r\n", settleW.c_str(), FmtRate(q2.rate).c_str(), toW.c_str(), Utf8ToWide(q2.kind).c_str());
     report += line;
-    std::string asOf = q1.asOf == q2.asOf ? q1.asOf : (q1.asOf + " / " + q2.asOf);
-    swprintf(line, 512, L"汇率日期：%hs\r\n", asOf.c_str());
-    report += line;
-  } else {
-    swprintf(line, 512, L"汇率日期：%hs\r\n", q.asOf.c_str());
+  }
+  {
+    swprintf(line, 512, L"汇率日期：%s\r\n", Utf8ToWide(q.asOf).c_str());
     report += line;
   }
   if (!q.note.empty() || (in.provider != "visa" && in.provider != "mastercard")) {
