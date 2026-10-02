@@ -563,8 +563,8 @@ static std::wstring BuildReport(const ConvInput& in) {
            FmtMoney(in.amount).c_str(), in.from.c_str(),
            FmtMoney(in.amount * q.rate).c_str(), in.to.c_str());
   report += line;
-  swprintf(line, 512, L"1 %hs = %s %hs  ·  %hs", in.from.c_str(), FmtRate(q.rate).c_str(), in.to.c_str(),
-           (twoLeg ? L"两跳换汇" : Utf8ToWide(q.kind).c_str()));
+  swprintf(line, 512, L"1 %hs = %s %hs  ·  %s", in.from.c_str(), FmtRate(q.rate).c_str(), in.to.c_str(),
+           (twoLeg ? L"两跳换汇" : Utf8ToWide(q.kind).c_str()).c_str());
   report += line;
   if ((in.provider == "visa" || in.provider == "mastercard") && in.fee > 0) {
     wchar_t fb[32]; swprintf(fb, 32, L" · 含 %.1f%% 手续费", in.fee);
