@@ -669,6 +669,20 @@ static int RunSelfTest(bool verbose) {
 // ============================================================
 // 9. CLI mode
 // ============================================================
+// GUI-subsystem console plumbing: if the process was launched with a
+// redirected std handle (pipe/file), CRT printf writes there directly;
+// otherwise attach to the parent console. Then force UTF-8 output CP.
+static void SetupConsole() {
+  HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+  bool haveHandle = h != nullptr && h != INVALID_HANDLE_VALUE;
+  if (!haveHandle) {
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+      FILE* out = nullptr;
+      freopen_s(&out, "CONOUT$", "w", stdout);
+    }
+  }
+  SetConsoleOutputCP(CP_UTF8);
+}
 static int RunCli(int argc, wchar_t** argv) {
   // --cli FROM TO AMOUNT [FEE] [DATE] [SETTLE] [PROVIDER]
   if (argc < 5) {
@@ -889,21 +903,17 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR cmdLine, int nCmdShow) {
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   if (argc >= 2) {
     if (wcscmp(argv[1], L"--selftest") == 0) {
-      AttachConsole(ATTACH_PARENT_PROCESS);
-      FILE* out = nullptr; freopen_s(&out, "CONOUT$", "w", stdout);
-      SetConsoleOutputCP(CP_UTF8);
+      SetupConsole();
       int rc = RunSelfTest(true);
-      if (out) fclose(out);
+      fflush(stdout);
       FreeConsole();
       LocalFree(argv);
       return rc;
     }
     if (wcscmp(argv[1], L"--cli") == 0) {
-      AttachConsole(ATTACH_PARENT_PROCESS);
-      FILE* out = nullptr; freopen_s(&out, "CONOUT$", "w", stdout);
-      SetConsoleOutputCP(CP_UTF8);
+      SetupConsole();
       int rc = RunCli(argc, argv);
-      if (out) fclose(out);
+      fflush(stdout);
       FreeConsole();
       LocalFree(argv);
       return rc;
