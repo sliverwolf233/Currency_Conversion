@@ -237,7 +237,8 @@ static HttpResult HttpGet(const std::wstring& host, int port, const std::wstring
   HINTERNET req = WinHttpOpenRequest(conn, L"GET", path.c_str(), nullptr, nullptr, nullptr,
                                      WINHTTP_FLAG_SECURE);
   if (!req) { r.err = "WinHttpOpenRequest failed"; WinHttpCloseHandle(conn); WinHttpCloseHandle(session); return r; }
-  BOOL sent = WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
+  const wchar_t* kHeaders = L"Accept: application/json, text/plain, */*\r\nAccept-Language: zh-CN,zh;q=0.9,en;q=0.8\r\n";
+  BOOL sent = WinHttpSendRequest(req, kHeaders, (DWORD)-1, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
            && WinHttpReceiveResponse(req, nullptr);
   if (!sent) { DWORD e = GetLastError(); wchar_t eb[32]; swprintf(eb, 32, L"%lu", e); r.err = "send/recv failed (" + WideToUtf8(eb) + ")"; }
   else {
@@ -375,7 +376,32 @@ static Quote VisaQuote(const std::string& from, const std::string& to, double fe
   return q;
 }
 
+static std::string UrlEncode(const std::string& s) {
+  static const char* hex = "0123456789ABCDEF";
+  std::string o;
+  for (unsigned char c : s) {
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') o += (char)c;
+    else { o += '%'; o += hex[c >> 4]; o += hex[c & 15]; }
+  }
+  return o;
+}
+
 // ---- Mastercard ----
+// Akamai fingerprints the WinHTTP/SChannel TLS hello and often answers 403
+// no matter the headers. Fallback: relay through the public CORS proxy used
+// by the web edition — its server-side TLS stack passes, and a desktop app
+// can call it without any CORS restrictions.
+static HttpResult McFetch(const std::wstring& path) {
+  HttpResult r = HttpGet(L"www.mastercard.com", 443, path);
+  if (r.status == 403 || r.status == 0 || r.body.empty()) {
+    std::string full = "https://www.mastercard.com" + WideToUtf8(path);
+    std::wstring proxyPath = L"/raw?url=" + Utf8ToWide(UrlEncode(full));
+    HttpResult via = HttpGet(L"api.allorigins.win", 443, proxyPath, 25000);
+    if (via.status == 200 && !via.body.empty()) return via;
+  }
+  return r;
+}
+
 static Quote McQuote(const std::string& from, const std::string& to, double fee, const std::string& dateIso) {
   Quote q;
   std::string dateParam = dateIso.empty() ? "0000-00-00" : dateIso;
@@ -384,8 +410,7 @@ static Quote McQuote(const std::string& from, const std::string& to, double fee,
            "/marketingservices/public/mccom-services/currency-conversions/conversion-rates"
            "?exchange_date=%s&transaction_currency=%s&cardholder_billing_currency=%s&bank_fee=%.2f&transaction_amount=100",
            dateParam.c_str(), from.c_str(), to.c_str(), fee);
-  HttpResult r = HttpGet(L"www.mastercard.com", 443, Utf8ToWide(path));
-  if (r.status == 403 || r.status == 0) r = HttpGet(L"www.mastercard.com", 443, Utf8ToWide(path)); // Akamai occasional block — retry
+  HttpResult r = McFetch(Utf8ToWide(path));
   if (r.status != 200 || r.body.empty()) { q.err = "Mastercard 接口请求失败 (HTTP " + std::to_string(r.status) + ")"; return q; }
   JPtr j = JsonParse(r.body);
   if (!j || !j->is("data")) { q.err = "Mastercard 响应解析失败"; return q; }
