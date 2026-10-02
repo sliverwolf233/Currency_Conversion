@@ -1,0 +1,6 @@
+*.exe
+*.obj
+*.pdb
+*.lib
+node_modules/
+.DS_Store

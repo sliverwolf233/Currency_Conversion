@@ -1,0 +1,43 @@
+name: Build Win32
+
+on:
+  push:
+    branches: [win32]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile (static, single exe)
+        shell: cmd
+        run: |
+          cl /nologo /utf-8 /EHsc /MT /O2 /W3 /DUNICODE /D_UNICODE main.cpp /link /SUBSYSTEM:WINDOWS /OUT:CardRate.exe
+
+      - name: Offline self test (required)
+        shell: cmd
+        run: |
+          CardRate.exe --selftest
+
+      - name: Live CLI smoke (best-effort — runner IPs are often blocked by Visa)
+        shell: cmd
+        continue-on-error: true
+        run: |
+          CardRate.exe --cli USD CNY 100 0 "" "" mastercard
+          CardRate.exe --cli USD CNY 100 0 "" "" unionpay
+          CardRate.exe --cli USD JPY 100 0 "" "" jcb-jpy
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CardRate-win32
+          path: CardRate.exe
+          if-no-files-found: error
