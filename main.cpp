@@ -522,7 +522,7 @@ static std::wstring BuildReport(const ConvInput& in) {
   std::wstring providerName = ProviderLabel(in.provider);
   if (in.compare) {
     const char* provs[4] = { "visa", "mastercard", "jcb-jpy", "unionpay" };
-    std::wstring report = L"═══ 四大卡组织对比 ═══\r\n";
+    std::wstring report = L"═══ 四大卡组织对比（交易 " + Utf8ToWide(in.from) + L" → 记账 " + Utf8ToWide(in.to) + L"）═══\r\n";
     for (int i = 0; i < 4; ++i) {
       std::string p = provs[i];
       Quote q = QueryOne(p, in.from, in.to, in.fee, in.dateIso);
@@ -711,6 +711,7 @@ static int RunCli(int argc, wchar_t** argv) {
   in.dateIso = argOr(6);
   in.settle = argc > 7 ? Upper(argOr(7)) : "";
   in.provider = argc > 8 ? WideToUtf8(argv[8]) : "visa";
+  in.compare = in.provider == "compare";
   std::wstring report = BuildReport(in);
   printf("%s\r\n", WideToUtf8(report).c_str());
   return report.find(L"查询失败") == std::wstring::npos ? 0 : 1;
@@ -804,26 +805,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       mkStatic(L"金额(&A)：", 276, y, 52);
       G.amount = mk(L"EDIT", L"100", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 330, y, 92, 22, IDC_AMOUNT);
       y += 34;
-      mkStatic(L"从(&F)：", 14, y, 78);
-      G.from = mk(L"COMBOBOX", L"USD", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 94, y, 100, 240, IDC_FROM);
-      G.swapB = mk(L"BUTTON", L"⇄", BS_PUSHBUTTON | WS_TABSTOP, 200, y - 1, 34, 24, IDC_SWAP);
-      mkStatic(L"到(&T)：", 238, y, 30);
-      G.to = mk(L"COMBOBOX", L"CNY", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 272, y, 100, 240, IDC_TO);
-      mkStatic(L"手续费%(&E)：", 380, y, 66);
-      G.fee = mk(L"EDIT", L"0", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 448, y, 46, 22, IDC_FEE);
+      mkStatic(L"交易货币(&F)（刷卡）：", 14, y, 118);
+      G.from = mk(L"COMBOBOX", L"USD", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 134, y, 88, 240, IDC_FROM);
+      G.swapB = mk(L"BUTTON", L"⇄", BS_PUSHBUTTON | WS_TABSTOP, 226, y - 1, 30, 24, IDC_SWAP);
+      mkStatic(L"记账货币(&T)（入账）：", 238, y, 118);
+      G.to = mk(L"COMBOBOX", L"CNY", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 358, y, 88, 240, IDC_TO);
+      // fee moved to row 3 to keep row 2 uncluttered
       y += 34;
       mkStatic(L"结算货币(&S)：", 14, y, 78);
       G.settle = mk(L"COMBOBOX", L"", CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP, 94, y, 100, 240, IDC_SETTLE);
       ComboBox_AddString(G.settle, L""); // 直换
-      mkStatic(L"日期(&D)：", 200, y, 40);
-      G.date = mk(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 244, y, 96, 22, IDC_DATE);
-      G.go = mk(L"BUTTON", L"查询换算", BS_DEFPUSHBUTTON | WS_TABSTOP, 360, y - 1, 80, 24, IDC_GO);
-      G.compareB = mk(L"BUTTON", L"对比全部", BS_PUSHBUTTON | WS_TABSTOP, 444, y - 1, 80, 24, IDC_COMPARE);
-      y += 36;
+      mkStatic(L"手续费%(&E)：", 216, y, 70);
+      G.fee = mk(L"EDIT", L"0", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 288, y, 44, 22, IDC_FEE);
+      mkStatic(L"日期(&D)：", 340, y, 40);
+      G.date = mk(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, 382, y, 96, 22, IDC_DATE);
+      y += 32;
+      G.go = mk(L"BUTTON", L"查询换算", BS_DEFPUSHBUTTON | WS_TABSTOP, 14, y, 90, 26, IDC_GO);
+      G.compareB = mk(L"BUTTON", L"对比全部", BS_PUSHBUTTON | WS_TABSTOP, 110, y, 90, 26, IDC_COMPARE);
+      y += 40;
       mkStatic(L"结果：", 14, y, 40);
       y += 20;
       G.report = mk(L"EDIT", L"", WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY | WS_VSCROLL | WS_TABSTOP,
-                    14, y, 510, 250, IDC_REPORT);
+                    14, y, 510, 200, IDC_REPORT);
       for (HWND c : { G.from, G.to, G.settle })
         for (auto code : COMMON_CODES) ComboBox_AddString(c, code);
       SetComboSel(G.from, L"USD");
